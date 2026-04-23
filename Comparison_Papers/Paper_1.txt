@@ -1,0 +1,476 @@
+Robust Curve Detection in Volumetric Medical
+Imaging via Attraction Field
+Farukh Yaushev
+1
+,
+2
+, Daria Nogina
+1
+,
+3
+, Valentin Samokhin
+1
+,
+2
+, Mariya Dugova
+1
+,
+Ekaterina Petrash
+1
+, Dmitry Sevryukov
+1
+, Mikhail Belyaev
+4
+, and Maxim Pisov
+4
+1
+IRA-Labs Ltd, Moscow, Russia
+2 Kharkevich Institute for Information Transmission Problems, Moscow, Russia 3 Lomonosov Moscow State University, Moscow, Russia 4 AUMI AI Limited, London, United Kingdom
+f.yaushev@ira-labs.com
+Abstract. Understanding body part geometry is crucial for precise medical diagnostics. Curves effectively describe anatomical structures and
+are widely used in medical imaging applications related to cardiovascular, respiratory, and skeletal diseases. Traditional curve detection methods are often task-specific, relying heavily on domain-specific features,
+limiting their broader applicability. This paper introduces an novel approach for detecting non-branching curves, which does not require prior
+knowledge of the object’s orientation, shape, or position. Our method
+uses neural networks to predict (1) an attraction field, which offers subpixel accuracy, and (2) a closeness map, which limits the region of interest and essentially eliminates outliers far from the desired curve. We
+tested our curve detector on several clinically relevant tasks with diverse morphologies and achieved impressive subpixel-level accuracy results that surpass existing methods, highlighting its versatility and robustness. Additionally, to support further advancements in this field, we
+provide our private annotations of aortic centerlines and masks, which
+can serve as a benchmark for future research. The dataset can be found
+at https://github.com/neuro-ml/curve-detection
+.
+Keywords: Curve detection
+· Attraction fields
+· Deep learning
+· Subpixellevel accuracy.
+1 Introduction
+Semantic segmentation is inarguably one of the most prominent tasks in medical
+image analysis with a particular focus on volumetric images such as computed
+tomography (CT) and magnetic resonance imaging (MRI) [14]. Indeed, various
+applications such as brain tumor [2], ischemic stroke [29], or lung cancer [22]
+detection and localization stimulated the development of many 3D segmentation
+networks [13].
+While many parts of the human body can be effectively represented as volumetric objects with corresponding segmentation masks, there are numerous
+arXiv:2408.01159v2 [cs.CV] 14 Aug 2024
+2 F. Yaushev et al.
+objects with an underlying low-dimensional structure that cannot be accurately described solely through segmentation masks. Important examples include the aortic centerline, vertebral column centerline, and ureters, which are
+essentiallycurves. A comprehensive understanding of the geometry associated
+with these curves is crucial for precise disease detection and severity assessment [34,33,28,7,24].
+Curve detection in medical images presents several significant challenges.
+Firstly, the complex geometry of the structures being sought poses difficulties
+because curves within the human body can exhibit diverse orientations, localization, and, notably, significant curvature. Secondly, many curves in medical
+images are not bound to the edges of objects or organs. For example, the aortic
+centerline is defined by surrounding vessel semantics rather than explicit local
+signals solely bound to the centerline. This requires the detection method to infer the curve from surrounding anatomical and contextual information instead of
+relying solely on edge detection or segmentation. Finally, most medical imaging
+problems require detecting only anatomically relevant structures, omitting other
+potential proposals. Therefore, the method should be capable of differentiating
+similar local structures by carefully weighing the global context.
+Numerous approaches have been proposed for curve detection. The most
+straightforward one is a direct segmentation at the pixel level [35,26]. However,
+the accuracy of this method is limited by the resolution of the raster, and it
+is not prone to the continuous nature of curves. Another class of approaches
+closely related to curve localization is edge and line segment detection methods,
+including classical algorithms like the Canny edge detector [4] or LCD [27], and
+modern deep learning-based methods [15,19,30,31,20]. A notable example is [15],
+where authors use a convolutional neural network (CNN) to predict an attraction
+field: for each pixel, the displacement to the closest edge is predicted, which is
+then used to generate a point cloud of potential edges. Attraction field proved to
+be a powerful concept, and several extensions have been proposed [19,32]. Despite these methods’ broad applicability, they currently face the above-mentioned
+challenges in the medical domain, as we show for the relevant ones.
+The curve detection also often appears in medical imaging domain. However,
+unlike edge or line detection methods, approaches in this field frequently rely
+heavily on task-specific features, limiting their generalizability. For instance,
+some methods depend on a heuristic starting point or the image’s orientation [37,33,36]. Other methods rely on segmenting objects that form the curve,
+like the aorta or blood vessels [8,21,23,9,6], which limits their use in tasks without an explicit object for segmentation, such as in the vertebral column centerline detection. Additionally, accuracy of segmentation- or heatmap-based methods [8,9] is limited by the raster’s resolution, making them overly sensitive to
+image spacing. These limitations highlight the need for more versatile and robust
+approaches in curve detection for medical applications.
+In this article, we introduce a novel approach to detecting non-branching
+curves that surpasses current methods by combining their strengths while addressing their limitations. Our strategy offers a fresh perspective on solving the
+Curve Detection 3
+challenge of curve detection in medical imaging, adapting the concept of an
+attraction field originally designed for line detection.
+Our contribution is three-fold. First, we introduce a new method for localizing non-branching curves in volumetric medical images, easily adaptable to
+various target objects. It is robust to the object’s geometry and does not require
+task-specific knowledge of orientation, shape, or position. Second, we demonstrate that the proposed method achieves subpixel-level accuracy and outperforms the existing approaches on two clinically significant and diverse tasks:
+aortic centerline and vertebral column centerline detection. Finally, to enhance
+reproducibility and comparability, we release all our available annotations of aortic centerlines and masks on several open datasets. They include complex cases
+on which, as we show, conventional methods perform poorly. The dataset can
+be found at https://github.com/neuro-ml/curve-detection.
+2 Method
+Our method Fig. 1 is based on a 3D two-headed CNN architecture with a VNetbased [13] backbone. The first head predicts the attraction field, pointing to the
+closest location on the curve in each voxel Fig. 1(b). The second head predicts
+the closeness map for each voxel. It represents a region of interest around the
+curve Fig. 1(c). At inference, predictions of two heads are combined. First, voxels
+are filtered according to the predicted closeness map and distances to the curve.
+Predicted attraction vectors of these voxels are then used to get the point cloud
+on the desired curve by shifting their coordinates. Finally, the point cloud is
+thinned using the non-maximum suppression algorithm, and then the points are
+parameterized using one-dimensional embedding.
+2.1 Loss Function
+The loss function consists of three pivotal components designed to refine specific
+aspects of the model’s predictions.
+Attraction Field The Lf ield, component addresses the loss related to the attraction field F [15]. For any given voxel p within an image, its corresponding
+ground truth field vector, Fp, is calculated as the projection vector from p to its
+nearest point rp on the ground truth curve: Fp = rp −p. The norm of Fp (∥Fp∥2)
+is the distance to the curve. The network is trained to predict attraction field
+Fˆ
+p Fig. 1(c) for each voxel p by optimizing a MSE loss:
+Lf ield(F , F ˆ ) = 1
+N
+X
+p
+∥Fˆ
+p − Fp∥
+1
+. (1)
+1 1
+N
+P
+p
+denotes averaging over all voxels of the image
+4 F. Yaushev et al.
+(a) Input image
+(d) Point cloud (e) Predicted curve
+(c) Closeness map
+(b) Attraction field
+(c.1) High probability near the curve
+(c.2) Low probability far from the curve
+(b.1) False-positives filtered by
+the closeness head
+(b.2) A vector with
+a large norm
+1D Embedding
+(b.3) A point with
+multiple projections
+Fig. 1. A schematic representation of the prediction pipeline for aortic centerline
+detection: a) a 3D input image, red circles denote the aorta; b) the predicted attraction
+field depicted for a given 2D slice, the red color indicates the field vectors that lead to
+inaccurate predictions; c) the closeness map predicted for a given 2D slice; d) the same
+2D slice relative to the predicted point cloud, the black dots represent the unordered
+set of points; e) the result of ordering using Isomap – the final predicted 3D curve.
+Closeness Map In practice, CNNs’ limited receptive fields [11] hinder their
+ability to capture long relations, leading to inaccurate attraction field predictions far from the sought structure. For this reason, we predict for each voxel
+a closeness Cp = I[∥Fp∥2 ≤ Rc], where I is the indicator function and Rc is
+a hyperparameter that regulates the maximal distance at which the network is
+allowed to make predictions. Predicted closeness, Cˆ, is utilized during inference
+to filter out voxels far from the desired curve. The closeness head Fig. 1(c) is
+trained by optimizing the binary cross entropy:
+Lcls(C, C ˆ ) = 1
+N
+X
+p
+BCE(Cˆ
+p, Cp). (2)
+Handling multiple projections Some voxels can have several projections
+on the curve Fig. 1(b.3). This is a source of inconsistency that impedes the
+training of the regression head. Instead of picking a projection, the network
+averages all the possible directions, thus ending up with a near-zero prediction.
+Note that even though a point can have multiple projections, by definition, each
+projection will have the same norm, ∥Fp∥2. This observation motivates us to add
+a regularization term:
+Lnorm(F , F ˆ ) = 1
+N
+X
+p
+| ∥Fˆ
+p∥2 − ∥Fp∥2 | . (3)
+Final Loss The resulting loss is the sum of all the above components:
+Curve Detection 5
+L = Lf ield + Lcls + Lnorm, (4)
+where the Lnorm, Lf ield are only computed inside the regions ∥Fp∥2 ≤ Rc
+and ∥Fp∥2 ≤ Rf respectively. Rf should be chosen small enough to reduce the
+probability of encountering multiple projections problem.
+2.2 Inference
+The point cloud is obtained as follows:
+{Fˆ
+p + p | Cˆ
+p ≥ t, ∥Fˆ
+p∥2 ≤ Rf }p, (5)
+where p iterates over all the voxels on the image, Cˆ
+p, Fˆ
+p, t, Rf are the predicted closeness, attraction field, and their respective thresholds. Fig. 1(b,c) illustrates the motivation for both closeness- and norm-based filtration: the closeness
+head improves precision, and the regression head improves recall.
+To refine the predicted point cloud, we employ a classic non-maximum suppression technique [16] where the closeness function is defined by the Euclidean
+distance, and the confidence is represented as −∥Fˆ
+p∥2 Fig. 1(d). After obtaining
+a point-reified cloud, we reorder the points to obtain a curve by reducing the
+dimensionality of the point cloud to 1D using Isomap [25]. This effectively gives
+us the internal parametrization of the curve, which is used to order the points
+Fig. 1(e).
+3 Experimental Setup
+Data Our method was evaluated on aortic centerline and vertebral column
+centerline detection tasks. Vertebral column annotations for 400 images were
+obtained from LungCancer500 [33] and VerSe2020 [12]. Aortic centerlines
+for 142 randomly selected images from LIDC-IDRI [1] and AMOS [10] were
+annotated in-house and shared on GitHub2
+. Three experienced radiologists annotated each image, and their averaged annotations formed the ground truth
+curve.
+Training Details We utilized a VNet-based backbone [13] with two output
+heads for all experiments. Each head comprises six Residual blocks with a kernel size of 3 and padding of 1. Training employed 75, 000 iterations with Adam
+optimizer, batch size of 2, and a learning rate policy starting at 10−4 and modified it to 5 · 10−5 and 5 · 10−6 at iterations 22, 500 and 37, 500 respectively.
+Preprocessing included resampling to 2 × 2 × 2 mm3
+resolution, intensity normalization, and simple data augmentation: rotations, flips, transpositions, and
+random patch sampling of size 150×150×150. In all our experiments, we use the
+following hyperparameters (see Section 2 for details): Rc = 10, Rf = 5, t = 0.5.
+The dependence of the metric on changes in hyperparameters is detailed in the
+Table 2.
+2
+https://github.com/neuro-ml/curve-detection
+6 F. Yaushev et al.
+Metrics For all tasks, we use the 1D variants of metrics between sets of points:
+Hausdorff Distance (HD), the Average Symmetric Surface Distance (ASSD),
+and the Surface Dice (SD) introduced in [18], for the thresholds 1 mm and 3
+mm. All results are computed via 5-fold cross-validation.
+Baselines To validate our method, we compare it with various baselines, drawing inspiration from both general methods and task-specific strong3 baselines for
+curve detection.
+1. Skeleton: The skeletonization-based approach is widely used for extracting
+tubular organ centerlines [5,8]. It involves segmenting the aorta followed by
+applying a skeletonization algorithm to extract its centerline. However, it is
+unsuitable for vertebral column centerline detection due to the absence of a
+specific tubular object for segmentation.
+2. Soft-argmax: A strong soft-argmax-based vertebral column centerline detection method, leveraging the vertical orientation of the backbone [33]. However, it is unsuitable for aortic centerline detection because it assumes each
+axial slice intersects the curve at most once, which does not hold for the
+complex geometry of the aorta, especially near its arch.
+3. Seg: This method involves straightforward curve segmentation using binary
+masks with 1-voxel wide curves.
+4. Htmp: Heatmap-based techniques, frequently used in key-point detection
+tasks, have demonstrated promising results [3,17]. Therefore, we compared
+our method with such an approach, which predicts distances (heatmap) to
+curve within the predicted closeness map. Points onto the curve are obtained
+by thresholding the heatmap. This approach is close to ours but does not use
+displacement vectors; it only considers their norms.
+5. Att: We directly compare with the method proposed in [15], which shows
+state-of-the-art results in the task of line segment detection. We trained the
+network to predict the vectors of the attraction field solely for each voxel.
+Unlike our method, it does not include the closeness head.
+The same VNet-based backbone architecture and postprocessing procedure
+2.2 were used for all models.
+4 Results
+Our model demonstrates consistently robust and accurate prediction ability,
+significantly outperforming baselines Table 1, Fig. 2 and Fig. 3. Notably, our
+model surpasses baselines not only in terms of accuracy but in addressing specific
+challenges related to generability (Skeleton, Soft-argmax ), prediction smoothness
+(Seg, Htmp), outliers far from the curve (Att).
+3 Strong baseline is a baseline that significantly exploits the unique features of a particular task, like the spine’s vertical orientation.
+Curve Detection 7
+Table 1. Comparison of curve detection methods’ metrics and their standard deviation (in brackets) for the aortic centerline and vertebral column centerline detection
+tasks. Bold numbers indicate the best performance. Omitted cells refer to methods not
+applicable to the task.
+Task Metrics Skeleton Soft-argmax Seg Htmp Att Ours
+AMOS, LIDC-IDRI
+Aortic
+centerline
+SD-1 0.30(0.11) - 0.43(0.12) 0.49(0.16) 0.43(0.17) 0.56(0.20)
+SD-3 0.88(0.16) - 0.91(0.11) 0.95(0.05) 0.93(0.12) 0.97(0.04)
+HD 21(21) - 22(27) 17(25) 21(28) 15(16)
+ASSD 2.5(2.2) - 2.5(3.0) 2.1(4.5) 2.9(5.4) 1.4(1.1)
+Vertebral column
+centerline
+Cancer500
+SD-1 - 0.36(0.24) 0.14(0.16) 0.34(0.21) 0.24(0.26) 0.42(.30)
+SD-3 - 0.94(0.11) 0.61(0.30) 0.94(0.08) 0.87(0.19) 0.96(.06)
+HD - 8(3) 31(33) 6(2) 11(10) 4(2)
+ASSD - 1.6(0.7) 7.6(15.1) 1.5(0.5) 2.3(1.3) 1.3(0.5)
+VerSe val
+SD-1 - 0.17(0.23) 0.36(0.17) 0.19(0.20) 0.31(0.26) 0.45(0.27)
+SD-3 - 0.80(0.23) 0.90(0.09) 0.80(0.23) 0.89(0.12) 0.93(0.01)
+HD - 28(12) 35(32) 28(11) 43(97) 24(14)
+ASSD - 2.8(1.2) 3.5(4.1) 2.7(1.1) 5.3(22.5) 1.9(1.2)
+VerSe test
+SD-1 - 0.21(0.28) 0.32(0.18) 0.19(0.19) 0.27(0.28) 0.45(0.30)
+SD-3 - 0.81(0.23) 0.89(0.13) 0.75(0.29) 0.85(0.18) 0.92(0.12)
+HD - 29(12) 31(26) 27(13) 45(102) 22(12)
+ASSD - 2.8(1.6) 2.9(3.6) 2.8(1.3) 5.3(16.1) 1.8(1.1)
+4.1 Models Performance
+In this section, we analyze in detail and compare the performance of baselines
+and the proposed method separately for two tasks.
+Aortic Centerline Metrics for task-specific Skeleton baseline are significantly
+inferior to Our Table 1. This is primarily due to the skeletonization algorithm’s
+dependency on the quality of the predicted mask, making it highly sensitive to
+minor errors within the segmentation.
+Fig. 2 demonstrates several typical predictions for Seg, Htmp, Att, and Our
+method. Note that the segmentation-based model yields sharp curves even in
+relatively simple cases because its accuracy is limited by the raster’s resolution
+Fig. 2(b). The high HD value for Seg is explained by false-negative predictions
+due to the highly imbalanced segmentation problem. The Htmp model shows
+a similar behavior but with a lower occurrence of false-negative predictions, as
+evidenced by a lower HD value. On the other hand, the Att model tends to
+8 F. Yaushev et al.
+Fig. 2. Aortic centerline predictions for various methods in sagittal or coronal projections, with the aorta highlighted in each case. Only relevant curves are displayed for
+clarity. a) Typical prediction without major defects; b) Magnified region showing the
+roughness of the Seg model’s predicted curve; c) Example of a false-positive for the Att
+model caused by another tubular structure; d) Erroneous prediction by our method;
+e) Axial slice where our method did not make a prediction due to noisiness - the aorta
+is indistinguishable.
+Fig. 3. Vertebral column centerline predictions for several methods in sagittal projections. For clarity, only curves of interest are shown. a) a typical prediction without
+major errors from our method; b) a magnified region highlighting the roughness of the
+predicted curve by the Seg model; c) a magnified region highlighting the roughness
+of the predicted curve by the Htmp model; d) an example of a typical false-positive
+for the Att model caused by another tubular structure; e) an example of an erroneous
+prediction by our method.
+Curve Detection 9
+Fig. 4. A sagittal projection of an image with kyphosis. The red region indicates the
+range of axial slices intersecting the curve at two locations – the cause of the inapplicability of soft-argmax-based methods. The green curve represents the prediction
+generated by our model.
+produce false-positives around tubular structures that resemble the aorta, such
+as the pulmonary trunk Fig. 2(c).
+A rare issue observed with Our method is occasional under-prediction of the
+curve’s limits Fig. 2(d). However, each failure has an explicable reason: noisy
+image region Fig. 2(e) or scanning artifacts.
+Vertebral Column Centerline Our approach outperforms the strong Softargmax baseline on both the relatively simple Cancer500 and more diverse
+VerSe dataset. Moreover, unlike Soft-argmax, our method does not rely on additional structural knowledge of the vertebral column’s shape, orientation, or
+position. This allows us to accurately localize the vertebral column centerline
+even in cases of extreme spinal curvature, such as severe kyphosis Fig. 4.
+The predictions made by other models exhibit behaviors similar to those
+seen in aortic centerline predictions Fig. 3. The Att model, for instance, shows
+the same typical false-positive detections. Similarly, the Seg and Htmp baselines
+struggle to produce accurate and smooth curves due to their inherent limitations
+related to raster resolution constraints.
+Summary Our model outperforms analyzed baselines in terms of accuracy and
+generality across both tasks. Overall, our method’s observed Hausdorff Distance
+(HD) may appear high. This is because HD is generally very sensitive not only
+to false-positives (outliers) but also to false-negatives (e.g., near curve’s limits),
+which our model is prone to Fig. 2(d). However, the more stable ASSD and
+Surface Dice metrics show that such errors are relatively rare. Furthermore,
+recall that our networks are trained with a 2 × 2 × 2 mm3
+spacing, which means
+that our method achieves subpixel-level accuracy: ASSD < 2 mm.
+10 F. Yaushev et al.
+Table 2. The dependence of metric on the values of hyperparameters Rc and Rf .
+Note that overall, changing the parameters in a reasonable range gives a quality still
+superior to the quality of baselines. However, for the aortic centerline, excessively large
+values of Rc and Rf can diminish performance due to limited receptive field and challenges related to multiple projections. This highlights the significance of optimizing the
+training loss component Ff ield specifically near the curve.
+Hyperparameter SD-1 mm SD-3 mm HD ASSD
+Aortic centerline, AMOS, LIDC-IDRI
+Rc = 5, Rf = 5 0.52 (0.14) 0.95 (0.05) 16 (18) 1.7 (1.2)
+Rc = 10, Rf = 5 0.56 (0.20) 0.97 (0.04) 15 (16) 1.4 (1.1)
+Rc = 15, Rf = 5 0.54 (0.12) 0.96 (0.05) 16 (17) 1.6 (1.3)
+Rc = 20, Rf = 5 0.52 (0.21) 0.97 (0.06) 15 (16) 1.4 (1.3)
+Rc = 10, Rf = 10 0.52 (0.18) 0.94 (0.04) 18 (15) 1.8 (1.1)
+Rc = 20, Rf = 20 0.50 (0.23) 0.93 (0.06) 18 (16) 2.1 (1.4)
+Vertebral column centerline, Cancer500
+Rc = 5, Rf = 5 0.44 (0.30) 0.97 (0.06) 6 (12) 1.3 (1.1)
+Rc = 10, Rf = 5 0.42 (0.30) 0.96 (0.06) 4 (2) 1.3 (0.5)
+Rc = 15, Rf = 5 0.41 (0.30) 0.97 (0.06) 5 (2) 1.3 (0.5)
+Rc = 20, Rf = 5 0.42 (0.30) 0.97 (0.06) 7 (12) 1.4 (1.2)
+Rc = 10, Rf = 10 0.40 (0.29) 0.97 (0.06) 7 (11) 1.4 (1.0)
+Rc = 20, Rf = 20 0.40 (0.30) 0.97 (0.05) 5 (2) 1.3 (0.5)
+4.2 Ablation Study
+For the ablation study, we demonstrate three aspects. (1) The importance of
+the closeness head to filter out the outliers. Att baseline produces many falsepositives far from the ground truth curve. In contrast, such problems are not
+observed in our model, which highlights this head’s importance in filtering out
+false-positives. (2) The importance of the attraction field to achieve subpixel accuracy. Skeleton, Seg, and Htmp baselines share a problem of prediction sharpness because of limited spacing. The displacement vectors provide the subpixel
+accuracy for our model. (3) The validity of the training strategy. We tested a reasonable range of hyperparameter values Table 2. Within this range, our model’s
+quality is still superior to the baselines’. However, for the aorta, overly large Rc
+and Rf values reduce the quality, probably due to a limited receptive field and
+multiple projection issues. This highlights the importance of optimizing the loss
+component Ff ield near the ground truth curve.
+5 Discussion and Conclusion
+We have introduced and validated a novel method for detecting non-branching
+curves in medical imaging, surpassing existing approaches. To facilitate further
+Curve Detection 11
+advancements in this field, we have released our private annotations, which can
+serve as a benchmark for future research.
+Our method directly predicts coordinates of curve points, thereby preventing rounding errors that can occur in segmentation or heatmap-based methods.
+This allows our approach to fully utilize the information in the training data to
+construct smooth, subpixel-accurate curves.
+To validate our method, we specifically focused on the tasks of detecting
+aortic and vertebral column centerlines. These tasks involve curves of different
+natures. The aortic centerline is cane-shaped and cannot be parameterized using
+one of the coordinates. In contrast, the vertebral column centerline has a more
+straightforward shape but is not associated with any tubular structure. Despite
+this, our model consistently outperforms baselines in accuracy and generality
+across both tasks.
+It is important to note that our method is designed for non-branching curves
+and is not directly applicable to tasks involving anatomical configurations with
+branching structures, such as vascular networks or airway trees. However, our
+preliminary experiments suggest that our method can be extended to handle
+branching structures by incorporating the prediction of branching points.
+References
+1. Armato, S.G., et al.: The lung image database consortium (lidc) and image
+database resource initiative (idri): a completed reference database of lung nodules on ct scans. Medical physics 38(2), 915–931 (2011)
+2. Bakas, S., et al.: Identifying the best machine learning algorithms for brain tumor
+segmentation, progression assessment, and overall survival prediction in the brats
+challenge. arXiv preprint arXiv:1811.02629 (2018)
+3. Bulat, A., Tzimiropoulos, G.: Human pose estimation via convolutional part
+heatmap regression. In: Computer Vision–ECCV 2016: 14th European Conference,
+Amsterdam, The Netherlands, October 11–14, 2016, Proceedings, Part VII 14. pp.
+717–732. Springer (2016)
+4. Canny, J.: A computational approach to edge detection. IEEE Transactions
+on Pattern Analysis and Machine Intelligence PAMI-8(6), 679–698 (1986).
+https://doi.org/10.1109/TPAMI.1986.4767851
+5. Gr´elard, F., Baldacci, F., Vialard, A., Domenger, J.P.: New methods for the geometrical analysis of tubular organs. Medical image analysis 42, 89–101 (2017)
+6. Guo, Z., et al.: Deepcenterline: A multi-task fully convolutional network for centerline extraction. IPMI 2019 11492, 441–453 (2019)
+7. Hadjiiski, L., et al.: Ureter tracking and segmentation in ct urography (ctu) using
+compass. Medical Physics 41(12), 121906 (2014)
+8. Hahn, L.D., et al.: Ct-based true-and false-lumen segmentation in type b aortic dissection using machine learning. Radiology: Cardiothoracic Imaging 2(3), e190179
+(2020)
+9. He, J., et al.: Learning hybrid representations for automatic 3d vessel centerline
+extraction. MICCAI 12266, 24–34 (2020)
+10. Ji, Y., et al.: Amos: A large-scale abdominal multi-organ benchmark for versatile
+medical image segmentation. arXiv preprint arXiv:2206.08023 (2022)
+12 F. Yaushev et al.
+11. Le, H., Borji, A.: What are the receptive, effective receptive, and projective fields of
+neurons in convolutional neural networks? arXiv preprint arXiv:1705.07049 (2017)
+12. L¨offler, M., et al.: A vertebral segmentation dataset with fracture grading. Radiology: Artificial Intelligence 2(4), e190138 (2020)
+13. Milletari, F., Navab, N., Ahmadi, S.A.: V-net: Fully convolutional neural networks
+for volumetric medical image segmentation. 3DV pp. 565–571 (2016)
+14. Minaee, S., Boykov, Y., Porikli, F., Plaza, A., Kehtarnavaz, N., Terzopoulos, D.:
+Image segmentation using deep learning: A survey. IEEE transactions on pattern
+analysis and machine intelligence 44(7), 3523–3542 (2021)
+15. Nan, X., Bai, S., Wang, F., Xia, G.S., Wu, T., Zhang, L.: Learning attraction field
+representation for robust line segment detection. CVPR (2019)
+16. Neubeck, A., Gool, L.V.: Efficient non-maximum suppression. ICPR’06 3, 850–855
+(2006). https://doi.org/10.1109/ICPR.2006.479
+17. Newell, A., Yang, K., Deng, J.: Stacked hourglass networks for human pose estimation. Computer Vision – ECCV 2016 pp. 483–499 (2016)
+18. Nikolov, S., et al.: Clinically applicable segmentation of head and neck anatomy for
+radiotherapy: Deep learning algorithm development and validation study. Journal
+of Medical Internet Research 23, e26151 (07 2021). https://doi.org/10.2196/26151
+19. Pautrat, R., Barath, D., Larsson, V., Oswald, M.R., Pollefeys, M.: Deeplsd: Line
+segment detection and refinement with deep image gradients. arXiv preprint
+arXiv:2212.07766 (2022)
+20. Poma, X.S., Riba, E., Sappa, A.: Dense extreme inception network: Towards a
+robust cnn model for edge detection. In: Proceedings of the IEEE/CVF winter
+conference on applications of computer vision. pp. 1923–1932 (2020)
+21. Roug´e, P., Passat, N., Merveille, O.: Cascaded multitask u-net using topological loss for vessel segmentation and centerline extraction. arXiv preprint
+arXiv:2307.11603 (2023)
+22. Setio, A., et al.: Validation, comparison, and combination of algorithms for automatic detection of pulmonary nodules in computed tomography images: the luna16
+challenge. Medical image analysis 42, 1–13 (2017)
+23. Shit, S., et al.: cldice-a novel topology-preserving loss function for tubular structure segmentation. Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition pp. 16560–16569 (2021).
+https://doi.org/10.1109/CVPR46437.2021.01629
+24. Spencer, T., Olson, J.A., McHardy, K.C., Sharp, P.F., Forrester, J.V.: An imageprocessing strategy for the segmentation and quantification of microaneurysms in
+fluorescein angiograms of the ocular fundus. Computers and biomedical research
+29(4), 284–302 (1996)
+25. Tenenbaum, J.B., Silva, V., Langford, J.C.: A global geometric framework
+for nonlinear dimensionality reduction. Science 290(5500), 2319–2323 (2000).
+https://doi.org/10.1126/science.290.5500.2319
+26. Valente, M., Stanciulescu, B.: Real-time method for general road segmentation. 2017 IEEE Intelligent Vehicles Symposium (IV) pp. 443–447 (2017).
+https://doi.org/10.1109/IVS.2017.7995758
+27. Von Gioi, R.G., Jakubowicz, J., Morel, J.M., Randall, G.: Lsd: A fast line segment
+detector with a false detection control. IEEE transactions on pattern analysis and
+machine intelligence 32(4), 722–732 (2008)
+28. Wang, F., Zheng, K., Lu, L., Xiao, J., Wu, M., Miao, S.: Automatic vertebra localization and identification in ct by spine rectification and anatomically-constrained
+optimization. IEEE/CVF Conference on Computer Vision and Pattern Recognition pp. 5280–5288 (2021)
+Curve Detection 13
+29. Winzeck, S., et al.: Isles 2016 and 2017-benchmarking ischemic stroke lesion outcome prediction based on multispectral mri. Frontiers in neurology 9, 679 (2018)
+30. Xie, S., Tu, Z.: Holistically-nested edge detection. In: Proceedings of the IEEE
+international conference on computer vision. pp. 1395–1403 (2015)
+31. Xu, Y., Xu, W., Cheung, D., Tu, Z.: Line segment detection using transformers
+without edges. In: Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition. pp. 4257–4266 (2021)
+32. Xue, N., Wu, T., Bai, S., Wang, F., Xia, G.S., Zhang, L., Torr, P.H.: Holisticallyattracted wireframe parsing. In: Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition. pp. 2788–2797 (2020)
+33. Zakharov, A., et al.: Interpretable vertebral fracture quantification via anchor-free
+landmarks localization. Medical Image Analysis 83, 102646 (2023)
+34. Zhang, H., Kheyfets, V.O., Finol, E.A.: Robust infrarenal aortic aneurysm lumen
+centerline detection for rupture status classification. Medical engineering & physics
+35(9), 1358–1367 (2013)
+35. Zhang, J., Xu, Y., Ni, B., Duan, Z.: Geometric constrained joint lane segmentation
+and lane boundary detection. Computer Vision – ECCV 2018 11205, 486–502
+(2018)
+36. Zhang, P., Wang, F., Zheng, Y.: Deep reinforcement learning for vessel centerline
+tracing in multi-modality 3d volumes. Medical Image Computing and Computer
+Assisted Intervention – MICCAI 2018 11073, 755–763 (2018)
+37. Zhao, J., Feng, Q.: Automatic aortic dissection centerline extraction via
+morphology-guided crn tracker. IEEE Journal of Biomedical and Health Informatics 25(9), 3473–3485 (2021)
