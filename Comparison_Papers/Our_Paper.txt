@@ -1,0 +1,578 @@
+Centerline Path Estimation of Deformable Linear Objects Under Self-Occlusion
+Sherlock Holmes1 Hermione Granger1 Frodo Baggins1
+Leia Organa1 Tony Stark1 Lara Croft1
+1Georgia Institute of Technology
+Abstract
+Deformable linear object (DLO) perception in monocular images requires recovering ordered centerlines under
+severe occlusion and self-occlusion, where segmentationfirst pipelines often fail to preserve curve order. We present
+an assignment-aware transformer framework for ordered
+centerline prediction based on a LETR/DETR-style architecture [2, 1]. The method combines curvature-driven annotation/group construction, global direction selection, and
+LSAP-based correspondence. We study four supervision
+variants spanning direct dense-curve Chamfer supervision
+(v2), group-aware deterministic matching with and without
+extra matches (v8/v9), and stochastic in-group representative sampling via a discrete normal distribution (v10). For
+compute-constrained model selection, we use a staged tournament protocol with standardized dense-curve evaluation
+and validation-threshold selection. This framework provides
+a reproducible basis for analyzing how matcher design affects robustness and ordered centerline quality in occlusionheavy DLO scenes.
+1. Introduction
+The core task in this work is predicting ordered centerline
+points of linear objects in images. This is our formulation of
+the deformable linear object (DLO) perception problem in
+monocular imagery. A primary challenge is severe occlusion:
+linear objects can intersect other objects or self-intersect
+repeatedly, so centerline segments disappear and reappear
+along the image. Under these conditions, pure segmentation formulations are often unsuitable because they do not
+directly enforce a consistent ordered centerline parameterization through occluded regions. In this project, we evaluate several model variants that share a common backbonetransformer architecture but differ in how prediction-target
+correspondences are constructed and supervised.
+This paper presents an implementation-grounded methods
+and evaluation framework for comparing assignment and
+supervision strategies for centerline prediction. Methods
+and experiment protocol sections are detailed, and results
+sections provide structured tables for quantitative reporting.
+Contributions.
+• A unified end-to-end architecture description for variants v2, v8, v9, and v10.
+• A detailed formulation of curvature-driven critical-point
+annotation and group construction used by the matcher.
+• A formal description of group-aware LSAP matching,
+global direction selection, and extra-match augmentation.
+2. Related Work
+2.1. Deformable Linear Object Perception
+Perception of deformable linear objects (DLOs) has been
+studied across sutures, ropes, and cables, where the core challenge is to recover a stable centerline under large deformation, appearance ambiguity, and frequent occlusion. We emphasize recent literature (primarily 2020+): learning-based
+pipelines that predict reliable keypoints before spline reconstruction [5], dataset/transferability benchmarks that expose domain-shift limits in 3D DLO understanding [7], and
+topology-preserving multi-DLO tracking for highly entangled scenes [8]. Recent DLO-focused datasets and transferability studies also highlight that generalization across object
+types (e.g., wiring vs. vessels) remains a central bottleneck
+even for strong 3D methods [7]. For multi-object, highly
+entangled settings, topology-preserving tracking methods
+such as MultiDLO emphasize geodesic/topological consistency to maintain identities and local structure under occlusion [8]. However, segmentation-first approaches still require topology reconstruction and ordering post-processing,
+which becomes brittle under repeated self-occlusions and
+crossings. Broader recent surveys similarly emphasize that
+perception errors under complex deformation directly degrade downstream manipulation and planning reliability [6].
+The RMDLO open-source ecosystem further reflects this
+trend toward integrated perception-tracking-manipulation
+pipelines for wires and ropes [10].
+1
+2.2. Set Prediction and Assignment for Curvilinear
+Targets
+Set-prediction frameworks with bipartite assignment
+(DETR-style) provide a natural way to supervise unordered
+query outputs [1, 4]. For curvilinear prediction, the open
+challenge is that geometric supervision depends not only on
+point location, but also on consistent point ordering along
+the curve parameter. This motivates assignment designs that
+explicitly couple correspondence, directionality, and ordering variables. In parallel, foundation-model segmentation
+approaches for DLOs (e.g., CLIPSeg+SAM adapters) report
+strong mask quality on cable datasets, but still target instance
+masks rather than ordered centerline parameterization [9].
+2.3. Positioning of This Work
+Our variants target the failure modes above by combining:
+• explicit dist-based ordering with global direction selection,
+• group-aware LSAP correspondence that is less sensitive
+to local target noise than point-wise-only matching,
+• controlled extra-match augmentation (v8/v10) to increase useful supervision under noisy labels,
+• stochastic in-group representative sampling (v10) as
+regularization against overfitting to a single deterministic representative.
+In short, relative to pure segmentation-then-reconstruction
+pipelines, this project pushes supervision directly into matching and ordered set prediction, which is better aligned with
+centerline parameterization under occlusion-heavy DLO
+scenes.
+3. Problem Setup and Label Structure
+For each image, the model predicts Q query outputs:
+{(ˆxq, yˆq,
+ˆdq,
+ˆℓq)}
+Q
+q=1,
+where (ˆxq, yˆq) are normalized 2D coordinates, ˆdq is a scalar
+curve-position value (dist), and ˆℓq are class logits over {line,
+background}.
+Targets use a point-wise format
+(xi
+, yi
+, di
+, gi), gi ∈ {−1, 0, 1, . . . },
+where the first three dimensions are geometric/value supervision and gi
+is a group identifier. Rows with gi = −1
+are excluded from group construction for LSAP, but remain
+eligible for v8/v10 extra matching.
+3.1. Curvature-Driven Point Annotation and Group
+Construction
+The label pipeline starts from a dense centerline parameterization
+f(t) = [x(t), y(t)], t ∈ {0, . . . , T},
+with curvature magnitude κ(t). Point placement density is
+controlled by curvature:
+ρ(t) = c κ(t),
+where c > 0 is a tuning constant. Over an interval [ta, tb],
+the expected number of annotation points follows
+NP(ta, tb) = c
+Z tb
+ta
+κ(t) ∥f
+′
+(t)∥2
+dt. (1)
+This allocates more control points near high-curvature regions while keeping straight segments sparse. Compared
+to uniform-by-arclength sampling, this is a more efficient
+representation: low-curvature regions (which are often wellconstrained by neighboring control points) are not overparameterized, while high-curvature regions receive the density needed to preserve shape. In practice, this reduces supervision redundancy and concentrates learning signal on
+geometrically informative locations.
+Critical points are then selected by cumulative-curvature
+progression along the dense curve. Let
+K(u, v) = Z v
+u
+κ(t) ∥f
+′
+(t)∥2
+dt. (2)
+Starting from one endpoint, a new critical point is created
+whenever K crosses a fixed step threshold; both endpoints
+are always retained. Given adjacent critical points at densecurve indices (a, b), an index midpoint is defined as
+m(a, b) = 
+a + b
+2
+
+. (3)
+Group IDs for LSAP are built from these midpoints:
+1. Dense points between consecutive midpoint indices are
+assigned one nonnegative group ID.
+2. The two endpoint points are singleton groups.
+3. Points from each endpoint to its nearest midpoint are
+assigned g = −1.
+Thus, LSAP projection groups come only from nonnegative IDs, while g = −1 rows are ignored for group representatives (but can still participate in v8/v10 extra matching). This construction also improves training stability for
+ordering-related heads: because control-point density follows geometric complexity, the model sees fewer ambiguous
+target points in straight segments and stronger local constraints near bends, which empirically reduces large ordering
+outliers and endpoint-related failure modes.
+4. End-to-End Architecture
+4.1. Backbone and Feature Interface
+The model uses a ResNet backbone (default: ResNet-50)
+with sine positional encodings. While the backbone can
+expose intermediate maps from C2–C5, the downstream architecture consumes only selected levels. In the base singletransformer pipeline (used by v2/v8/v9/v10), one deep feature map (C5) is projected by a 1 × 1 convolution into transformer dimension d = 256 and used as the transformer input.
+In the stacked two-stage pipeline, a second, higher-resolution
+map (C4) is additionally consumed by the refinement transformer. Spatial masks from the nested-tensor input are propagated so attention ignores padded pixels.
+4.2. Transformer Core
+Given image features F ∈ R
+C×H×W and learned query
+embeddings {qk}
+Q
+k=1, a LETR/DETR-style encoder-decoder
+transformer outputs per-query hidden states hk ∈ R
+d
+for
+each decoder layer [2, 1]. Here, C is the feature-channel
+count, H, W are spatial dimensions, Q is the number of
+learned query slots, B is batch size, d is transformer hidden
+width (default d = 256), and L is the number of decoder
+layers (default L = 6). The final decoder layer is used
+for primary predictions; earlier layers can provide auxiliary
+losses depending on configuration. Concretely, the projected
+map is flattened to token form
+F˜ ∈ R
+HW×B×d
+,
+encoded with self-attention, and decoded with Q learned
+queries to produce
+H ∈ R
+L×B×Q×d
+.
+Output heads consume HL (final layer) for main predictions
+and optionally H1:(L−1) for auxiliary losses.
+4.3. Two-Stage Multi-Resolution Pipeline
+The framework supports a two-stage training/inference
+path for explicit multi-resolution fusion:
+• Stage 1 (coarse/global): train the base transformer on
+the deeper backbone feature map (C5).
+• Stage 2 (refinement/higher-res): freeze the stage-1
+stack, then add a second transformer that consumes a
+higher-resolution feature map (C4) through a new 1×1
+projection.
+In stage 2, the final stage-1 decoder states are passed as
+query tokens to the second transformer decoder. This integrates global ordering/context from stage 1 with finer local
+geometry from the higher-resolution map, improving sensitivity to thin structures and local bends. An optional stage-3
+fine-tuning phase keeps this stacked structure and changes
+optimization/loss settings (e.g., focal classification).
+4.4. Output Heads
+Default heads in this project are:
+• classification head: linear or residual-MLP depending
+on variant,
+• line head: residual-MLP to 2D coordinates,
+• dist head: residual-MLP to 1D dist.
+By default, line and dist outputs use sigmoid activation, i.e.,
+pˆq = σ(fxy(hq)),
+ˆdq = σ(fd(hq)).
+4.5. Variant-Specific Architectural Notes
+• v2: classification head is removed from learning path
+(dummy logits emitted only for API compatibility).
+• v8/v9/v10: architecture remains base-like; differences
+are matcher/loss behavior.
+5. Methods
+5.1. Dense-Curve Comparison Principle
+Sparse control-point sets are not compared directly for
+evaluation because different sparse sets can represent nearly
+identical curves. Predicted and target curves are therefore
+densified before geometric comparison:
+1. order control points by dist,
+2. interpolate XY with Catmull–Rom,
+3. interpolate dist linearly along arclength,
+4. compare dense 3D clouds in [x, y, d] space.
+With predicted dense cloud Cˆ = {cˆu} and target dense cloud
+C = {cv}, the symmetric Chamfer score used in this project
+is
+C(C, C ˆ ) = 1
+2
+
+
+1
+|Cˆ|
+X
+cˆ∈Cˆ
+min
+c∈C
+∥cˆ− c∥p +
+1
+|C|
+X
+c∈C
+min
+cˆ∈Cˆ
+∥c − cˆ∥p
+
+ ,
+(4)
+with p = 1 in the current experiments.
+5.2. Directionality and Dist Reversal
+Since dist can be interpreted in forward or reverse orientation, a global per-image direction choice is made by
+evaluating LSAP cost under:
+forward: d, backward: d
+′ = dmax − d + dmin, (5)
+with dmin = 0.1 in current implementation. The lower-cost
+orientation is selected once per image and reused downstream. Equivalently, if Θ is the set of admissible global
+direction hypotheses for an image and σ denotes the LSAP
+assignment under one hypothesis, the matcher computes
+θ
+∗ = arg min
+θ∈Θ
+min
+σ
+Lmatch(σ, θ), (6)
+and all downstream regression/classification targets are built
+using θ
+∗
+(no second direction chooser later in the loss path).
+5.3. LSAP Matching (Group Projection)
+Given Q predictions and G target groups, the matcher
+constructs a cost matrix
+C(q, g) = λlineCline(q, g) + λclsCcls(q, g), (7)
+where
+Cline(q, g) = min
+p∈Gg
+∥zˆq − zp∥1
+,
+zˆq = [ˆxq, yˆq,
+ˆdq],
+zp = [xp, yp, dp].
+(8)
+and Ccls(q, g) = −P(labelg | q) from softmax logits. Hungarian assignment solves
+π
+∗ = arg min
+π
+X
+(q,g)∈π
+C(q, g), (9)
+with one-to-one query/group pairing.
+5.4. Representative Point Selection by Variant
+For each target group, the line-cost projection uses one of
+the following representative strategies:
+• v8, v9: deterministic midpoint by in-group index.
+• v10: one sample per group drawn with discrete normal
+probabilities over in-group index.
+Discrete normal sampler (v10). For group width W, indices i ∈ {0, . . . , W − 1}, center µ = (W − 1)/2, and
+variance chosen so edge weight ratio is approximately 0.01,
+unnormalized weights are
+wi = exp
+−
+1
+2
+
+i − µ
+σ
+2
+!
+,
+then normalized to probabilities pi = wi/
+P
+j wj . This
+favors interior points while preserving stochasticity for robustness.
+5.5. Extra Matching Stage (v8 and v10)
+After LSAP matching, v8/v10 may add unmatched predictions as extra positives. Let M be original LSAP matches,
+with 3D L1 distances
+δm = ∥zˆm − zm∥1
+, m ∈ M.
+0.00
+0.03
+0.07
+0.10
+0.14
+0 5 10 15 20
+Discrete Normal Sampler Curve
+In-group index i
+p(i)
+Figure 1. Discrete normal index probabilities used by v10 for pergroup LSAP representative sampling.
+Extra matching is enabled only if
+mean(δm) ≤ τLSAP-max, (10)
+where default τLSAP-max = 0.05. Here, Qp(·) denotes the
+p-th percentile (quantile) operator over a set of distances.
+Candidate unmatched predictions are kept if nearest 3D L1
+distance to any target point (including g = −1 rows) is
+below per-image percentile threshold Qp({δm}) (default
+p = 75%).
+Candidates are then processed in ascending nearestdistance order and accepted only if they satisfy a 2D spacing
+constraint against:
+• LSAP target midpoints, and
+• already accepted/matched prediction points.
+Spacing threshold is
+τ2D = min (Q10%(pairwise LSAP-target midpoint distances), 0.015).
+(11)
+Accepted extra matches are labeled as line class and included
+in classification/regression losses.
+5.6. Losses by Variant
+5.6.1 Variant v2 (curve-level Chamfer)
+v2 does not use Hungarian assignment in its primary loss
+path. Predicted points are treated as a 3D set [x, y, d] and
+supervised by symmetric Chamfer distance:
+Lv2 = min 
+C(P , T ˆ ), C(Pˆflip-d, T)
+
+, (12)
+where only dist ordering is flipped in the second hypothesis;
+XY ordering is unchanged.
+5.6.2 Variants v8, v9, v10 (assignment-first)
+These variants optimize
+L = λceLce + λlineLxy + λdLd, (13)
+with current implementation details:
+• Lce: cross-entropy (stage 1/2), optional focal loss in
+stage 3.
+• Lxy: L1 regression on matched (x, y), scaled by factor
+4.0 in code.
+• Ld: L1 regression on matched d.
+Default weighting in criterion uses the same configured coefficient for line and dist branches.
+5.7. Summary of Variant Behavior
+6. Experiments
+6.1. Data and Splits
+Dataset organization follows COCO-style image and annotation splits. Training and validation use predefined singlecurve annotation subsets. Default preprocessing resizes images to 500 × 500 before normalization and augmentation.
+6.2. Dataset Examples
+Figure 2 shows representative raw snake images from
+the current dataset split. Figure 3 shows corresponding examples from the centerline-visualization set, where dense
+interpolated centerlines are overlaid.
+6.3. Training Setup
+All compared variants are trained with the same staged
+multi-phase training procedure. Training uses distributed
+execution over up to 3 GPUs.
+Stage schedule used in tournament round-2. Current
+tournament defaults run three stages per variant:
+• Stage 1: 120 epochs, LR drop at epoch 100.
+• Stage 2: 120 epochs, LR drop at epoch 100 (checkpoint
+handoff with frozen lower stack; this is the explicit
+higher-resolution fusion stage).
+• Stage 3: 40 epochs, LR drop at epoch 20 (fine-tuning;
+focal classification loss enabled in v8/v9/v10).
+6.4. Tournament Protocol
+A tournament-style orchestration procedure provides tworound logic. In the current configuration, round 1 is disabled
+by default and all variants proceed directly to round 2.
+For each variant (and optionally each seed), the harness:
+1. launches staged training,
+2. evaluates the final stage checkpoint using a unified
+curve metric,
+3. stores per-run records in CSV,
+4. ranks variants by mean score (lower is better),
+5. generates summary plots (ranking bars, training-loss
+curves, threshold statistics).
+6.5. Evaluation Metric
+Evaluation computes dense curve Chamfer in 3D [x, y, d]:
+1. order predicted control points by predicted dist,
+2. fit dense Catmull–Rom spline in XY,
+3. linearly interpolate dist along curve arclength,
+4. compute symmetric Chamfer distance to target [x, y, d]
+points.
+By default, Chamfer uses p = 1 (L1 metric).
+6.6. Curvature-Weighted Chamfer Distance
+In addition to standard symmetric Chamfer, we include
+a curvature-weighted variant to emphasize high-curvature
+regions that are most informative for curve character. Let
+f(t) be a reference dense curve on [t0, t1] with curvature
+κf (t) and arclength
+Lf =
+Z t1
+t0
+∥f
+′
+(t)∥2
+dt. (14)
+Using the same normalization constants as the annotation
+process (constant c and point-count term NPf ), define two
+terms:
+αf =
+c
+Lf NPf
+, (15)
+I(f, g) = Z t1
+t0
+κf (t) min
+s
+∥f(t) − g(s)∥2
+∥f
+′
+(t)∥2
+dt.
+(16)
+Then the compact form is
+CW Error(f, g) = αf I(f, g). (17)
+The symmetric curvature-weighted Chamfer between dense
+curves is then
+CCW(f, g) = 1
+2
+(CW Error(f, g) + CW Error(g, f)).
+(18)
+For dataset-level reporting over paired curves {(fi
+, gi)}
+N
+i=1,
+we use
+CWMean = 1
+N
+X
+N
+i=1
+CCW(fi
+, gi). (19)
+This metric is useful when small geometric deviations in
+high-curvature regions should be penalized more strongly
+than comparable deviations along straight segments. In the
+experiment protocol, we treat CWMean as a diagnostic metric: the primary ranking remains dense 3D Chamfer, while
+CWMean is reported to analyze behavior on curvature-rich
+regions.
+Variant Primary Supervision LSAP Group Representative Extra Matching Directionality Choice
+v2 Dense curve-level 3D
+Chamfer on predicted set
+N/A (no assignment in main
+loss)
+No Choose lower Chamfer
+between dist-forward and
+dist-flipped hypotheses
+v8 Matched CE + L1(xy) +
+L1(d)
+Deterministic midpoint of each
+group
+Yes (percentile + spacing
+gates)
+Global LSAP
+forward/backward choice
+per image
+v9 Matched CE + L1(xy) +
+L1(d)
+Deterministic midpoint of each
+group
+No Global LSAP
+forward/backward choice
+per image
+v10 Matched CE + L1(xy) +
+L1(d)
+One sampled index per group
+from discrete normal
+probabilities
+Yes (same as v8) Global LSAP
+forward/backward choice
+per image
+Table 1. Concise method differences among variants studied in this draft.
+Figure 2. Representative raw snake images from the source dataset.
+6.7. Threshold Search for Classification Variants
+For variants with prediction-level class probabilities, the
+evaluator sweeps inclusion threshold t ∈ [0.4, 1.0] with step
+0.02. For each threshold, it recomputes dense curve Chamfer over the validation split and selects the best threshold
+per variant/checkpoint. This controls for threshold sensitivity when comparing to variants that do not use class-gated
+selection.
+6.8. Ablation Plan (Recommended)
+6.9. Results Tables (to fill)
+7. Discussion
+7.1. Expected Behavioral Differences
+• v2 may better capture global curve geometry early, but
+lacks explicit one-to-one assignment structure.
+• v8 may improve recall in noisy settings via controlled
+Figure 3. Examples showing interpolated centerline visualizations.
+Ablation Configuration
+A1 v8 extra matching off (becomes v9-like)
+A2 v10 sampler replaced by deterministic midpoint (becomes v8-like LSAP representative)
+A3 v8/v10 extra-match percentile: 50/75/90
+A4 v8/v10 LSAP gate τLSAP-max: 0.03/0.05/0.07
+A5 Chamfer evaluation sensitivity to curve resample factor
+and points-per-segment
+Table 2. Suggested ablations to isolate gains from matcher design
+choices.
+extra matches.
+• v9 provides a cleaner baseline to isolate whether extra
+matching helps or hurts.
+• v10 introduces stochasticity in representative choice,
+which may regularize against overfitting to deterministic in-group midpoints.
+• Curvature-driven annotation is expected to be both compact and more stable: it suppresses low-value supervision in straight segments while increasing constraints
+at high-curvature locations where prediction errors are
+typically most disruptive.
+7.2. Limitations
+• LSAP cost is still based on nearest 3D point projection,
+not full-sequence alignment.
+• Dist ordering relies on non-differentiable sorting for
+control-point ordering.
+• Tournament comparison is budget-limited and may not
+reflect full-convergence ranking.
+8. Reproducibility Checklist
+• Codebase: project source, training configurations, and
+evaluation utilities are version-controlled.
+• Input resolution: default 500 × 500.
+• GPU setup: distributed training over up to 3 GPUs.
+• Evaluation: fixed dense-curve Chamfer protocol with
+threshold sweep for class-gated variants.
+• Randomness: one seed per run in tournament-mode
+evaluation.
+Variant Mean Val Chamfer ↓ Std Best Threshold Stage-3 Loss Extra Matches / Image Notes
+v2 [TODO: fill] [TODO: fill] N/A [TODO: fill] N/A Curve-level objective
+v8 [TODO: fill] [TODO: fill] [TODO: fill] [TODO: fill] [TODO: fill] Midpoint LSAP + extras
+v9 [TODO: fill] [TODO: fill] [TODO: fill] [TODO: fill] 0 Midpoint LSAP only
+v10 [TODO: fill] [TODO: fill] [TODO: fill] [TODO: fill] [TODO: fill] Discrete-normal LSAP + extras
+Table 3. Primary tournament comparison table (round-2 results).
+9. Conclusion
+This draft provides a concrete, implementation-faithful
+manuscript scaffold for the current centerline-variant study.
+The key methodological axis is assignment design: from
+global curve-level supervision (v2) to group-aware LSAP
+with deterministic or stochastic representatives (v8/v9/v10),
+and optional extra matching for robustness to noisy line inputs. Filling the provided results templates after tournament
+completion will yield a near-ready technical paper draft.
+Next Writing Steps.
+• Insert quantitative results from tournament CSV outputs.
+• Add qualitative figure panel of predicted curves on validation images.
+• Expand related-work citations for DETR-style set prediction, curve fitting, and robust matching.
+References
+[1] N. Carion et al. End-to-End Object Detection with
+Transformers. ECCV, 2020. 1, 2, 3
+[2] Y. Xu, W. Xu, D. Cheung, and Z. Tu. Line Segment
+Detection Using Transformers Without Edges. CVPR,
+2021. 1, 3
+[3] E. Catmull and R. Rom. A Class of Local Interpolating
+Splines. In Computer Aided Geometric Design, 1974.
+[4] H. W. Kuhn. The Hungarian Method for the Assignment Problem. Naval Research Logistics Quarterly,
+1955. 2
+[5] N. Joglekar, F. Liu, R. Orosco, and M. Yip. Suture
+Thread Spline Reconstruction from Endoscopic Images
+for Robotic Surgery with Reliability-driven Keypoint
+Detection. ICRA, 2023. 1
+[6] M. Yu and X. Li. Robotic Manipulation of Deformable
+Linear Objects: A Survey. Robot, 2024. 1
+[7] B. L. Zagar, T. Hertel, M. Liu, E. Yurtsever, and A. C.
+Knoll. 3D Understanding of Deformable Linear Objects: Datasets and Transferability Benchmark. arXiv
+preprint arXiv:2310.08904, 2023. 1
+[8] J. Xiang and H. Dinkel. MultiDLO: Simultaneous
+Shape Tracking of Multiple Deformable Linear Objects with Global-Local Topology Preservation. arXiv
+preprint arXiv:2310.13245, 2023. 1
+[9] S. Kozlovsky, O. Joglekar, and D. Di Castro. ISCUTE:
+Instance Segmentation of Cables Using Text Embedding. arXiv preprint arXiv:2402.11996, 2024. 2
+[10] RMDLO. Representing and Manipulating Deformable
+Linear Objects (GitHub Organization). https://
+github.com/RMDLO, accessed 2026.
+1

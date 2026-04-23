@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Training outputs
+outputs/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
